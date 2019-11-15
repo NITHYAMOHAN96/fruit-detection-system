@@ -1,0 +1,170 @@
+network/fruit_train_net.py
+2
+3 import tensorflow as tf
+4 import numpy as np
+5 import time
+6 import os
+7 import re
+8
+9 from network_structure import fruit_network as network
+10 from network_structure import utils
+11
+12 from utils import constants
+13
+14 # default number of iterations to run the training
+15 iterations = 75000
+16 # default number of iterations after we display the
+loss and accuracy
+17 acc_display_interval = 1000
+18 # default number of iterations after we save the model
+19 save_interval = 1000
+20 # default number of iterations after we display the
+total number of steps done and the time spent
+training the past step_display_interval iterations
+21 step_display_interval = 100
+22 # use the saved model and continue training; defaults
+to false
+23 useCkpt = False
+24
+25 # create two datasets from the previously created
+training tfrecord files
+26 # the first dataset will apply data augmentation and
+shuffle its elements and will continuously queue
+new items - used for training
+27 # the second dataset will iterate once over the
+training images - used for evaluating the loss and
+accuracy during the training
+28 def build_datasets(filenames , batch_size):
+29 train_dataset = tf.data.TFRecordDataset(filenames)
+42
+.repeat()
+30 train_dataset = train_dataset.map(utils.
+parse_single_example).map(lambda image , label:
+(utils.augment_image(image), label))
+31 train_dataset = train_dataset.shuffle(buffer_size
+=10000 , reshuffle_each_iteration=True)
+32 train_dataset = train_dataset.batch(batch_size)
+33 test_dataset = tf.data.TFRecordDataset(filenames)
+34 test_dataset = test_dataset.map(utils.
+parse_single_example).map(lambda image , label:
+(utils.build_hsv_grayscale_image(image), label)
+)
+35 test_dataset = test_dataset.batch(batch_size)
+36 return train_dataset , test_dataset
+37
+38
+39 def train_model(session , train_operation ,
+loss_operation , correct_prediction , iterator_map):
+40 time1 = time.time()
+41 train_iterator = iterator_map[" train_iterator "]
+42 test_iterator = iterator_map[" test_iterator "]
+43 test_init_op = iterator_map[" test_init_op "]
+44 train_images_with_labels = train_iterator.get_next
+()
+45 test_images_with_labels = test_iterator.get_next()
+46 for i in range(1, iterations + 1):
+47 batch_x , batch_y = session.run(
+train_images_with_labels)
+48 batch_x = np.reshape(batch_x , [network.
+batch_size , network.input_size])
+49 session.run(train_operation , feed_dict={
+network.X: batch_x , network.Y: batch_y})
+50
+51 if i % step_display_interval == 0:
+52 time2 = time.time()
+53 print("time: %.4f step: %d" % (time2 -
+time1 , i))
+54 time1 = time.time()
+43
+55
+56 if i % acc_display_interval == 0:
+57 acc_value , loss =
+calculate_intermediate_accuracy_and_loss
+(session , correct_prediction ,
+loss_operation , test_images_with_labels
+, test_init_op , constants.
+number_train_images)
+58 network.learning_rate = network.
+update_learning_rate(acc_value ,
+learn_rate=network.learning_rate)
+59 print("step: %d loss: %.4f accuracy: %.4f"
+% (i, loss , acc_value))
+60 if i % save_interval == 0:
+61 # save the weights and the meta data for
+the graph
+62 saver.save(session , constants.
+fruit_models_dir + ’model.ckpt ’)
+63 tf.train.write_graph(session.graph_def ,
+constants.fruit_models_dir , ’graph.
+pbtxt ’)
+64
+65
+66 def calculate_intermediate_accuracy_and_loss(session ,
+correct_prediction , loss_operation ,
+test_images_with_labels , test_init_op ,
+total_image_count):
+67 sess.run(test_init_op)
+68 loss = 0
+69 predicted = 0
+70 count = 0
+71 while True:
+72 try:
+73 test_batch_x , test_batch_y = session.run(
+test_images_with_labels)
+74 test_batch_x = np.reshape(test_batch_x ,
+[-1, network.input_size])
+75 l, p = session.run([loss_operation ,
+44
+correct_prediction], feed_dict={network
+.X: test_batch_x , network.Y:
+test_batch_y})
+76 loss += l
+77 predicted += np.sum(p)
+78 count += 1
+79 except tf.errors.OutOfRangeError:
+80 break
+81 return predicted / total_image_count , loss / count
+82
+83
+84 if __name__ == ’__main__ ’:
+85
+86 with tf.Session().as_default() as sess:
+87
+88 # input tfrecord files
+89 tfrecords_files = [(constants.data_dir + f)
+for f in os.listdir(constants.data_dir) if
+re.match(’train ’, f)]
+90 train_dataset , test_dataset = build_datasets(
+filenames=tfrecords_files , batch_size=
+network.batch_size)
+91 train_iterator = train_dataset.
+make_one_shot_iterator()
+92 test_iterator = tf.data.Iterator.
+from_structure(test_dataset.output_types ,
+test_dataset.output_shapes)
+93 test_init_op = test_iterator.make_initializer(
+test_dataset)
+94 iterator_map = {" train_iterator ":
+train_iterator , " test_iterator ":
+test_iterator , " test_init_op ": test_init_op
+}
+95
+96 train_op , loss , correct_prediction = network.
+build_model()
+97 init = tf.global_variables_initializer()
+98 saver = tf.train.Saver()
+45
+99 sess.run(init)
+100
+101 # restore the previously saved value if we
+wish to continue the training
+102 if useCkpt:
+103 ckpt = tf.train.get_checkpoint_state(
+constants.fruit_models_dir)
+104 saver.restore(sess , ckpt.
+model_checkpoint_path)
+105
+106 train_model(sess , train_op , loss ,
+correct_prediction , iterator_map)
+107
+108 sess.close()
